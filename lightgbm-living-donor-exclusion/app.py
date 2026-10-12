@@ -22,9 +22,21 @@ import matplotlib.pyplot as plt  # noqa: E402
 APP_DIR = Path(__file__).resolve().parent
 BUNDLE_PATH = APP_DIR / "model_bundle.joblib"
 PLOT_LOCK = Lock()
+ANALYSIS_LABEL = "Living-donor-exclusion sensitivity analysis"
+INPUT_LABELS = {
+    "Neohepatic-phase Urine Flow Rate": "Neohepatic-phase urine flow rate (NHP-UFR)",
+    "VIS": "Vasoactive-inotropic score (VIS)",
+    "DBIL": "Direct bilirubin (DBIL)",
+    "MELD": "Model for End-stage Liver Disease (MELD) score",
+    "sCr": "Serum creatinine (sCr)",
+    "Plasma transfusion": "Plasma transfusion",
+    "Operation Time": "Operation time",
+    "Hb": "Hemoglobin (Hb)",
+    "Hypertension": "Hypertension",
+}
 
 
-@st.cache_resource(show_spinner="正在加载已锁定的 LightGBM 模型…")
+@st.cache_resource(show_spinner="Loading the locked LightGBM model...")
 def load_bundle() -> dict:
     return joblib.load(BUNDLE_PATH)
 
@@ -96,20 +108,20 @@ def values_outside_observed_range(bundle: dict, values: dict[str, float]) -> lis
     for feature in bundle["features"]:
         config = bundle["input_config"][feature]
         if values[feature] < config["observed_min"] or values[feature] > config["observed_max"]:
-            outside.append(config["label"])
+            outside.append(INPUT_LABELS[feature])
     return outside
 
 
 def main() -> None:
-    st.set_page_config(page_title="AKI 风险计算器｜LightGBM", page_icon="🩺", layout="centered")
+    st.set_page_config(page_title="AKI Risk Calculator | LightGBM", page_icon="🩺", layout="centered")
     bundle = load_bundle()
     metadata = bundle["metadata"]
-    st.title("术后急性肾损伤（AKI）风险计算器")
+    st.title("Postoperative Acute Kidney Injury (AKI) Risk Calculator")
     st.caption(
-        f"{metadata['analysis']}｜{metadata['model_name']}｜训练集 {metadata['training_n']} 例，"
-        f"独立测试集 {metadata['test_n']} 例（AUC {metadata['test_auc']:.2f}）"
+        f"{ANALYSIS_LABEL} | {metadata['model_name']} | Training cohort: {metadata['training_n']} patients; "
+        f"independent test cohort: {metadata['test_n']} patients (AUC {metadata['test_auc']:.2f})"
     )
-    st.info("仅供科研展示与辅助研究使用，不应用作独立临床诊疗决策。")
+    st.info("For research and educational use only. This calculator must not be used as an independent basis for clinical decision-making.")
 
     values: dict[str, float] = {}
     with st.form("risk_calculator"):
@@ -117,20 +129,20 @@ def main() -> None:
             config = bundle["input_config"][feature]
             if config["kind"] == "binary":
                 values[feature] = float(
-                    st.selectbox(config["label"], options=[0, 1], index=int(config["default"]),
+                    st.selectbox(INPUT_LABELS[feature], options=[0, 1], index=int(config["default"]),
                                  format_func=lambda value: "Yes" if value else "No")
                 )
             else:
                 values[feature] = float(
                     st.number_input(
-                        config["label"],
+                        INPUT_LABELS[feature],
                         min_value=float(config["min"]),
                         max_value=float(config["max"]),
                         value=float(config["default"]),
                         step=float(config["step"]),
                     )
                 )
-        submitted = st.form_submit_button("计算 AKI 风险", type="primary")
+        submitted = st.form_submit_button("Calculate AKI Risk", type="primary")
 
     if not submitted:
         return
@@ -141,25 +153,25 @@ def main() -> None:
     threshold = float(bundle["threshold"])
     predicted_high_risk = probability >= threshold
 
-    st.metric("预测 AKI 概率", f"{probability:.1%}")
+    st.metric("Predicted AKI Probability", f"{probability:.1%}")
     if predicted_high_risk:
-        st.warning(f"按训练折外锁定阈值 {threshold:.3f}，该输入被归为模型高风险组。")
+        st.warning(f"Using the training out-of-fold threshold of {threshold:.3f}, this case is classified as high risk by the model.")
     else:
-        st.success(f"按训练折外锁定阈值 {threshold:.3f}，该输入未归为模型高风险组。")
+        st.success(f"Using the training out-of-fold threshold of {threshold:.3f}, this case is not classified as high risk by the model.")
 
     outside = values_outside_observed_range(bundle, values)
     if outside:
-        st.warning("以下输入虽在网页允许范围内，但已超出研究队列观察范围：" + "、".join(outside) + "。结果属于外推，应谨慎解读。")
+        st.warning("The following input(s) are within the calculator limits but outside the observed development-cohort range: " + ", ".join(outside) + ". The result is an extrapolation and should be interpreted cautiously.")
 
-    with st.expander("查看本例的 SHAP 概率力图", expanded=False):
-        with st.spinner("正在生成本例的 SHAP 解释…"):
+    with st.expander("View SHAP Probability Force Plot for This Case", expanded=False):
+        with st.spinner("Generating the SHAP explanation for this case..."):
             figure = make_probability_shap_figure(bundle, raw_input, scaled_input)
             if figure is None:
-                st.info("当前输入与训练集各变量中位数基线一致；相对该基线的各项 SHAP 贡献均为 0。")
+                st.info("The current input equals the training-median baseline; all SHAP contributions relative to this baseline are zero.")
             else:
                 st.pyplot(figure, clear_figure=True, use_container_width=True, dpi=150, bbox_inches=None)
                 plt.close(figure)
-        st.caption("基线为训练集各变量中位数；图中贡献值解释的是 AKI 概率，而非因果效应。")
+        st.caption("The baseline is the training-set median for each variable. Contributions reflect the fitted model's associations with predicted AKI probability and do not imply causality.")
 
 
 if __name__ == "__main__":
